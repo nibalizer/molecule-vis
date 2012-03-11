@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html><body>
+  <script src="lightgl.js"></script>
+  <script src="csg.js"></script>
+  <script>
+// Set the color of all polygons in this solid
+CSG.prototype.setColor = function(r, g, b) {
+  this.toPolygons().map(function(polygon) {
+    polygon.shared = [r, g, b];
+  });
+  return this;
+};
+
+// Convert from CSG solid to GL.Mesh object
+CSG.prototype.toMesh = function() {
+  var mesh = new GL.Mesh({ normals: true, colors: true });
+  var indexer = new GL.Indexer();
+  this.toPolygons().map(function(polygon) {
+    var indices = polygon.vertices.map(function(vertex) {
+      vertex.color = polygon.shared || [1, 1, 1];
+      return indexer.add(vertex);
+    });
+    for (var i = 2; i < indices.length; i++) {
+      mesh.triangles.push([indices[0], indices[i - 1], indices[i]]);
+    }
+  });
+  mesh.vertices = indexer.unique.map(function(v) { return [v.pos.x, v.pos.y, v.pos.z]; });
+  mesh.normals = indexer.unique.map(function(v) { return [v.normal.x, v.normal.y, v.normal.z]; });
+  mesh.colors = indexer.unique.map(function(v) { return v.color; });
+  mesh.computeWireframe();
+  return mesh;
+};
+
+//methane molecule (in [[Ångström]]s)
+//C        0.000000        0.000000        0.000000
+//H        0.000000        0.000000        1.089000
+//H        1.026719        0.000000       -0.363000
+//H       -0.513360       -0.889165       -0.363000
+//H       -0.513360        0.889165       -0.363000
+carbon1 = CSG.sphere({ radius: 1.70, center: [0.000000, 0.000000, 0.000000] });
+hydrogen1 = CSG.sphere({ radius: 1.20, center: [0.000000, 0.000000, 1.089000] });
+hydrogen2 = CSG.sphere({ radius: 1.20, center: [1.026719,        0.000000,       -0.363000] });
+hydrogen3 = CSG.sphere({ radius: 1.20, center: [-0.513360,       -0.889165,       -0.363000] });
+hydrogen4 = CSG.sphere({ radius: 1.20, center: [-0.513360,        0.889165,       -0.363000] });
+carbon1.setColor(0.2, 0.2, 0.2);
+hydrogen1.setColor(1, 1, 1);
+hydrogen2.setColor(1, 1, 1);
+hydrogen3.setColor(1, 1, 1);
+hydrogen4.setColor(1, 1, 1);
+
+var csg = carbon1.union(hydrogen1.union(hydrogen2.union(hydrogen3.union(hydrogen4))))
+
+//var csg = CSG.sphere({ center: [-0.25, -0.25, -0.25] });
+var gl = GL.create();
+//this.gl = gl;
+//this.mesh = csg.toMesh();
+var mesh = csg.toMesh();
+var angleX = 30;
+var angleY = 45;
+//var mesh = GL.Mesh.cube({ normals: true });
+var offset = new GL.Vector();
+/*
+var shader = new GL.Shader('\
+  varying vec3 normal;\
+  void main() {\
+    normal = gl_Normal;\
+    gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\
+  }\
+', '\
+  varying vec3 normal;\
+  void main() {\
+    gl_FragColor = vec4(normal * 0.5 + 0.5, 1.0);\
+  }\
+');
+*/
+var shader = new GL.Shader('\
+  varying vec3 color;\
+  varying vec3 normal;\
+  varying vec3 light;\
+  void main() {\
+    const vec3 lightDir = vec3(1.0, 2.0, 3.0) / 3.741657386773941;\
+    light = (gl_ModelViewMatrix * vec4(lightDir, 0.0)).xyz;\
+    color = gl_Color.rgb;\
+    normal = gl_NormalMatrix * gl_Normal;\
+    gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\
+  }\
+', '\
+  varying vec3 color;\
+  varying vec3 normal;\
+  varying vec3 light;\
+  void main() {\
+    vec3 n = normalize(normal);\
+    float diffuse = max(0.0, dot(light, n));\
+    float specular = pow(max(0.0, -reflect(light, n).z), 32.0) * sqrt(diffuse);\
+    gl_FragColor = vec4(mix(color * (0.3 + 0.7 * diffuse), vec3(1.0), specular), 1.0);\
+  }\
+');
+
+var result;
+var originalOffset;
+
+gl.onmousedown = function(e) {
+  var tracer = new GL.Raytracer();
+  var ray = tracer.getRayForPixel(e.x, e.y);
+  result = GL.Raytracer.hitTestBox(tracer.eye, ray, offset.subtract(1), offset.add(1));
+  originalOffset = offset;
+};
+
+gl.onmousemove = function(e) {
+  if (e.dragging) {
+    if (result) {
+      var tracer = new GL.Raytracer();
+      var ray = tracer.getRayForPixel(e.x, e.y);
+      var t = result.hit.subtract(tracer.eye).dot(result.normal) / ray.dot(result.normal);
+      var hit = tracer.eye.add(ray.multiply(t));
+      offset = originalOffset.add(hit.subtract(result.hit));
+    } else {
+      angleY += e.deltaX;
+      angleX = Math.max(-90, Math.min(90, angleX + e.deltaY));
+    }
+    gl.ondraw();
+  }
+};
+
+//var that = this;
+gl.ondraw = function() {
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.loadIdentity();
+  gl.translate(0, 0, -10);
+  gl.rotate(angleX, 1, 0, 0);
+  gl.rotate(angleY, 0, 1, 0);
+
+  // Use push and pop to guard the transform so gl is left in world space when
+  // gl.ondraw() ends. This way, when the GL.Raytracer reads the modelview and
+  // projection matrices, the rays it generates will be in world space.
+  gl.pushMatrix();
+  gl.translate(offset.x, offset.y, offset.z);
+  shader.draw(mesh);
+  gl.popMatrix();
+};
+
+gl.fullscreen();
+gl.enable(gl.DEPTH_TEST);
+gl.ondraw();
+
+  </script>
+</body></html>
